@@ -1,0 +1,391 @@
+
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quản lý Ảnh</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f0f0f0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1, h2 {
+            text-align: center;
+        }
+        #fileInput {
+            display: none;
+        }
+        .button {
+            display: inline-block;
+            padding: 10px 20px;
+            margin: 10px 5px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        .time-section {
+            margin-bottom: 20px;
+            border: 1px solid #ddd;
+        }
+        .image-container {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        .image-wrapper {
+            position: relative;
+            width: 150px;
+            height: 150px;
+            cursor: pointer;
+        }
+        .image-wrapper img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .image-wrapper:hover::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.3);
+        }
+        .image-wrapper.selected {
+            outline: 3px solid #4CAF50;
+        }
+        .select-overlay {
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            width: 20px;
+            height: 20px;
+            background-color: white;
+            border: 2px solid #4CAF50;
+            border-radius: 50%;
+            display: none;
+        }
+        .selected .select-overlay {
+            display: block;
+        }
+        .selected .select-overlay::after {
+            content: '✓';
+            color: #4CAF50;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+        #fullscreenOverlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            z-index: 1000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #fullscreenImage {
+            max-width: 90%;
+            max-height: 90%;
+        }
+        #closeFullscreen {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            color: white;
+            font-size: 30px;
+            cursor: pointer;
+        }
+        .select-all-btn {
+            display: none;
+        }
+
+
+        #selectionInfo {
+            margin-top: 10px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Quản lý Ảnh</h1>
+        <input type="file" id="fileInput" accept="image/*" multiple>
+        <button class="button" id="uploadBtn">Tải lên ảnh</button>
+        <button class="button" id="selectBtn">Chọn ảnh</button>
+        <button class="button" id="deleteBtn" style="display: none;">Xóa ảnh đã chọn</button>
+        <div id="selectionInfo"></div>
+        <div id="imageGroups"></div>
+    </div>
+
+    <div id="fullscreenOverlay">
+        <span id="closeFullscreen">&times;</span>
+        <img id="fullscreenImage" src="" alt="Fullscreen Image">
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-storage.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    
+    <script>
+       
+        // Cấu hình Firebase
+        const firebaseConfig = {
+             apiKey: "AIzaSyC9ALtFzZzbLl_YnFb3moXEedb8ZsdUS5g",
+  authDomain: "cast-image2.firebaseapp.com",
+  databaseURL: "https://cast-image2-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "cast-image2",
+  storageBucket: "cast-image2.firebasestorage.app",
+  messagingSenderId: "134152526124",
+  appId: "1:134152526124:web:2ab82d92b377ae39f0b489",
+  measurementId: "G-1Y64BQ4S1W"
+        };
+
+        // Khởi tạo Firebase
+        firebase.initializeApp(firebaseConfig);
+
+        // Lấy tham chiếu đến Firebase Storage và Realtime Database
+        const storage = firebase.storage();
+        const database = firebase.database();
+
+        const fileInput = document.getElementById('fileInput');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const selectBtn = document.getElementById('selectBtn');
+        const deleteBtn = document.getElementById('deleteBtn');
+        const imageGroups = document.getElementById('imageGroups');
+        const fullscreenOverlay = document.getElementById('fullscreenOverlay');
+        const fullscreenImage = document.getElementById('fullscreenImage');
+        const closeFullscreen = document.getElementById('closeFullscreen');
+        const selectionInfo = document.getElementById('selectionInfo');
+
+        let isSelectMode = false;
+        let selectedCount = 0;
+
+        uploadBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', uploadImages);
+        selectBtn.addEventListener('click', toggleSelectMode);
+        deleteBtn.addEventListener('click', deleteSelectedImages);
+        closeFullscreen.addEventListener('click', closeFullscreenView);
+
+        function uploadImages() {
+            const files = fileInput.files;
+            if (files.length === 0) {
+                alert('Vui lòng chọn ít nhất một tệp ảnh.');
+                return;
+            }
+
+            Array.from(files).forEach(file => {
+                const storageRef = storage.ref('images/' + file.name);
+                const uploadTask = storageRef.put(file);
+
+                uploadTask.on('state_changed', 
+                    (snapshot) => {
+                        // Xử lý tiến trình tải lên (nếu cần)
+                    },
+                    (error) => {
+                        console.error('Lỗi tải lên:', error);
+                    },
+                    () => {
+                        uploadTask.snapshot.ref.getDownloadURL().then((downloadURL) => {
+                            saveImageUrlToDatabase(downloadURL, file.name);
+                        });
+                    }
+                );
+            });
+        }
+
+        function saveImageUrlToDatabase(url, filename) {
+            const newImageRef = database.ref('images').push();
+            newImageRef.set({
+                url: url,
+                filename: filename,
+                timestamp: firebase.database.ServerValue.TIMESTAMP
+            });
+        }
+
+        database.ref('images').on('value', (snapshot) => {
+            const images = snapshot.val();
+            displayImagesByTime(images);
+        });
+
+        function displayImagesByTime(images) {
+            imageGroups.innerHTML = '';
+            if (!images) return;
+
+            const groupedImages = groupImagesByTime(images);
+
+            for (const [timeGroup, groupImages] of Object.entries(groupedImages)) {
+                const section = document.createElement('div');
+                section.className = 'time-section';
+                section.innerHTML = `
+                    <h2>${timeGroup}</h2>
+                    <button class="button select-all-btn">Chọn tất cả</button>
+                    <div class="image-container"></div>
+                `;
+                const imageContainer = section.querySelector('.image-container');
+                
+                groupImages.forEach(image => {
+                    displayImage(image.url, image.key, imageContainer);
+                });
+
+                section.querySelector('.select-all-btn').addEventListener('click', () => selectAllInGroup(imageContainer));
+
+                imageGroups.appendChild(section);
+            }
+
+            // Đảm bảo các nút "Chọn tất cả" được ẩn khi bắt đầu
+            document.querySelectorAll('.select-all-btn').forEach(btn => {
+                btn.style.display = 'none';
+            });
+        }
+
+        function groupImagesByTime(images) {
+            const grouped = {
+                'Hôm nay': [],
+                'Tuần này': [],
+                'Tháng này': [],
+                'Cũ hơn': []
+            };
+
+            const now = new Date();
+            const oneDay = 24 * 60 * 60 * 1000;
+            const oneWeek = 7 * oneDay;
+
+            for (const [key, image] of Object.entries(images)) {
+                const imageDate = new Date(image.timestamp);
+                const timeDiff = now - imageDate;
+
+                if (timeDiff < oneDay) {
+                    grouped['Hôm nay'].push({...image, key});
+                } else if (timeDiff < oneWeek) {
+                    grouped['Tuần này'].push({...image, key});
+                } else if (imageDate.getMonth() === now.getMonth() && imageDate.getFullYear() === now.getFullYear()) {
+                    grouped['Tháng này'].push({...image, key});
+                } else {
+                    grouped['Cũ hơn'].push({...image, key});
+                }
+            }
+
+            return grouped;
+        }
+
+        function displayImage(url, key, container) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'image-wrapper';
+            wrapper.dataset.key = key;
+
+            const image = document.createElement('img');
+            image.src = url;
+            wrapper.appendChild(image);
+
+            const overlay = document.createElement('div');
+            overlay.className = 'select-overlay';
+            wrapper.appendChild(overlay);
+
+            wrapper.addEventListener('click', () => {
+                if (isSelectMode) {
+                    toggleSelection(wrapper);
+                } else {
+                    openFullscreenView(url);
+                }
+            });
+
+            container.appendChild(wrapper);
+        }
+
+        function toggleSelectMode() {
+    isSelectMode = !isSelectMode;
+    selectBtn.textContent = isSelectMode ? 'Hủy chọn' : 'Chọn ảnh';
+    deleteBtn.style.display = isSelectMode ? 'inline-block' : 'none';
+
+    // Cập nhật các ảnh
+    document.querySelectorAll('.image-wrapper').forEach(wrapper => {
+        if (isSelectMode) {
+            wrapper.style.cursor = 'pointer';
+        } else {
+            wrapper.style.cursor = 'default';
+            // Bỏ chọn tất cả ảnh nếu không còn ở chế độ chọn
+            if (wrapper.classList.contains('selected')) {
+                wrapper.classList.remove('selected');
+                selectedCount = 0; // Reset số lượng đã chọn
+            }
+        }
+    });
+
+    updateSelectionInfo();
+
+    // Hiển thị hoặc ẩn các nút "Chọn tất cả"
+    document.querySelectorAll('.select-all-btn').forEach(btn => {
+        btn.style.display = isSelectMode ? 'inline-block' : 'none';
+    });
+}
+
+
+        function toggleSelection(wrapper) {
+            if (wrapper.classList.contains('selected')) {
+                wrapper.classList.remove('selected');
+                selectedCount--;
+            } else {
+                wrapper.classList.add('selected');
+                selectedCount++;
+            }
+            updateSelectionInfo();
+        }
+
+        function updateSelectionInfo() {
+            selectionInfo.textContent = `Số ảnh đã chọn: ${selectedCount}`;
+        }
+
+        function selectAllInGroup(container) {
+            container.querySelectorAll('.image-wrapper').forEach(wrapper => {
+                if (!wrapper.classList.contains('selected')) {
+                    wrapper.classList.add('selected');
+                    selectedCount++;
+                }
+            });
+            updateSelectionInfo();
+        }
+
+        function deleteSelectedImages() {
+            document.querySelectorAll('.image-wrapper.selected').forEach(wrapper => {
+                const key = wrapper.dataset.key;
+                database.ref('images/' + key).remove().then(() => {
+                    wrapper.remove();
+                    selectedCount = 0;
+                    updateSelectionInfo();
+                }).catch(error => {
+                    console.error('Lỗi xóa ảnh:', error);
+                });
+            });
+        }
+
+        fullscreenOverlay.style.display = 'none';  // Đảm bảo không hiển thị khi tải trang
+
+function openFullscreenView(url) {
+    fullscreenImage.src = url;
+    fullscreenOverlay.style.display = 'flex';  // Hiển thị overlay khi mở chế độ fullscreen
+}
+
+function closeFullscreenView() {
+    fullscreenOverlay.style.display = 'none';  // Ẩn overlay khi đóng chế độ fullscreen
+}
+    </script>
+</body>
+</html>
